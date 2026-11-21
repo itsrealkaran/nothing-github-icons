@@ -68,9 +68,12 @@ async function icon(buffer, theme, size, original) {
   )
     .png()
     .toBuffer();
+  const accent = theme.endsWith("-r")
+    ? accentHoles(mask, rendered.info.width, rendered.info.height)
+    : null;
   const mark = original
-    ? await keepColor(rendered.data, rendered.info.width, rendered.info.height, mask)
-    : await paint(rendered.data, rendered.info.width, rendered.info.height, mask, rgb(colors.fg));
+    ? await keepColor(rendered.data, rendered.info.width, rendered.info.height, mask, accent)
+    : await paint(rendered.data, rendered.info.width, rendered.info.height, mask, rgb(colors.fg), accent);
   const left = Math.round((size - rendered.info.width) / 2);
   const top = Math.round((size - rendered.info.height) / 2);
   return sharp(plate)
@@ -222,6 +225,81 @@ function cutPlate(data, mask, count, width) {
   return next;
 }
 
+// A small enclosed dot, such as a Python eye, is the red accent on -r.
+// Larger counters, such as a letter hole or a gear cutout, stay empty.
+function accentHoles(mask, width, height) {
+  const count = width * height;
+  let ink = 0;
+  for (let index = 0; index < count; index += 1) if (mask[index]) ink += 1;
+  const accent = new Uint8Array(count);
+  if (ink < 12) return accent;
+  const outside = new Uint8Array(count);
+  const stack = [];
+  const seed = (index) => {
+    if (index < 0 || index >= count || mask[index] || outside[index]) return;
+    outside[index] = 1;
+    stack.push(index);
+  };
+  for (let x = 0; x < width; x += 1) {
+    seed(x);
+    seed((height - 1) * width + x);
+  }
+  for (let y = 0; y < height; y += 1) {
+    seed(y * width);
+    seed(y * width + width - 1);
+  }
+  while (stack.length) {
+    const index = stack.pop();
+    const x = index % width;
+    const y = (index - x) / width;
+    if (x > 0) seed(index - 1);
+    if (x + 1 < width) seed(index + 1);
+    if (y > 0) seed(index - width);
+    if (y + 1 < height) seed(index + width);
+  }
+  const seen = new Uint8Array(count);
+  const cap = Math.max(6, ink * 0.02);
+  for (let start = 0; start < count; start += 1) {
+    if (mask[start] || outside[start] || seen[start]) continue;
+    const component = [];
+    const pending = [start];
+    seen[start] = 1;
+    let minX = width;
+    let maxX = 0;
+    let minY = height;
+    let maxY = 0;
+    while (pending.length) {
+      const index = pending.pop();
+      component.push(index);
+      const x = index % width;
+      const y = (index - x) / width;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      const neighbors = [];
+      if (x > 0) neighbors.push(index - 1);
+      if (x + 1 < width) neighbors.push(index + 1);
+      if (y > 0) neighbors.push(index - width);
+      if (y + 1 < height) neighbors.push(index + width);
+      neighbors.forEach((next) => {
+        if (mask[next] || outside[next] || seen[next]) return;
+        seen[next] = 1;
+        pending.push(next);
+      });
+    }
+    const spanX = maxX - minX + 1;
+    const spanY = maxY - minY + 1;
+    const aspect = Math.max(spanX, spanY) / Math.max(1, Math.min(spanX, spanY));
+    const fill = component.length / (spanX * spanY);
+    if (component.length < 4 || component.length > cap || aspect > 1.8 || fill < 0.55) continue;
+    component.forEach((index) => {
+      accent[index] = 255;
+    });
+  }
+  return accent;
+}
+
 function toneOf(data, offset) {
   const red = data[offset] / 255;
   const green = data[offset + 1] / 255;
@@ -245,7 +323,21 @@ function hueGap(left, right) {
   return Math.min(gap, 360 - gap);
 }
 
-async function keepColor(data, width, height, mask) {
+const ACCENT = { r: 200, g: 16, b: 46 };
+
+function stampAccent(pixels, accent) {
+  if (!accent) return;
+  for (let index = 0; index < accent.length; index += 1) {
+    if (!accent[index]) continue;
+    const offset = index * 4;
+    pixels[offset] = ACCENT.r;
+    pixels[offset + 1] = ACCENT.g;
+    pixels[offset + 2] = ACCENT.b;
+    pixels[offset + 3] = 255;
+  }
+}
+
+async function keepColor(data, width, height, mask, accent) {
   const pixels = Buffer.alloc(width * height * 4);
   for (let index = 0; index < width * height; index += 1) {
     const alpha = mask[index];
@@ -256,10 +348,11 @@ async function keepColor(data, width, height, mask) {
     pixels[offset + 2] = data[offset + 2];
     pixels[offset + 3] = alpha;
   }
+  stampAccent(pixels, accent);
   return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
 
-async function paint(data, width, height, mask, color) {
+async function paint(data, width, height, mask, color, accent) {
   const pixels = Buffer.alloc(width * height * 4);
   for (let index = 0; index < width * height; index += 1) {
     const alpha = mask[index];
@@ -270,6 +363,7 @@ async function paint(data, width, height, mask, color) {
     pixels[offset + 2] = color.b;
     pixels[offset + 3] = alpha;
   }
+  stampAccent(pixels, accent);
   return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
 
