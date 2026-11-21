@@ -73,7 +73,7 @@ async function handle(req, res) {
     send(res, 200, "image/svg+xml; charset=utf-8", errorSvg("unknown card"), 60);
     return;
   }
-  const source = (url.searchParams.get("url") || url.searchParams.get("src") || "").trim();
+  const source = (url.searchParams.get("url") || "").trim();
   if (!source) {
     res.writeHead(302, { Location: GITHUB, "Cache-Control": "no-store" });
     res.end();
@@ -93,8 +93,8 @@ async function handle(req, res) {
     send(res, 200, "image/svg+xml; charset=utf-8", errorSvg("unknown size"), 60);
     return;
   }
-  const glyph = (url.searchParams.get("glyph") || "1").trim().toLowerCase();
-  const original = ["0", "no", "off", "false"].includes(glyph);
+  const glyph = (url.searchParams.get("glyph") || "").trim();
+  const original = glyph === "0";
   const key = [theme, size, original ? "0" : "1", source].join("\0");
   const hit = cache.get(key);
   if (hit && hit.expires > Date.now()) {
