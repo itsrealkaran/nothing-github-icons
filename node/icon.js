@@ -3,21 +3,29 @@
 const sharp = require("sharp");
 
 const THEMES = {
-  dark: { bg: "#000000", fg: { r: 255, g: 255, b: 255 } },
-  light: { bg: "#FFFFFF", fg: { r: 0, g: 0, b: 0 } },
+  classic: { bg: "#000000", fg: "#FFFFFF" },
+  "classic-r": { bg: "#000000", fg: "#FFFFFF" },
+  white: { bg: "#FFFFFF", fg: "#000000" },
+  "white-r": { bg: "#FFFFFF", fg: "#000000" },
+  light: { bg: "#DCD7D2", fg: "#000000" },
+  red: { bg: "#000000", fg: "#C8102E" },
+  blue: { bg: "#FFFFFF", fg: "#002F6C" },
+  yellow: { bg: "#000000", fg: "#FFC700" },
 };
 
-const ALIASES = {
-  classic: "dark",
-  "classic-r": "dark",
-  white: "light",
-  "white-r": "light",
-  dark: "dark",
-  light: "light",
-};
+const ALIASES = { dark: "classic" };
 
 function themeName(value) {
-  return ALIASES[String(value || "dark").trim().toLowerCase()] || "";
+  const name = ALIASES[String(value || "classic").trim().toLowerCase()] || String(value || "classic").trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(THEMES, name) ? name : "";
+}
+
+function rgb(hex) {
+  return {
+    r: parseInt(hex.slice(1, 3), 16),
+    g: parseInt(hex.slice(3, 5), 16),
+    b: parseInt(hex.slice(5, 7), 16),
+  };
 }
 
 function iconSize(value) {
@@ -26,7 +34,7 @@ function iconSize(value) {
   return Math.round(size);
 }
 
-async function icon(buffer, theme, size) {
+async function icon(buffer, theme, size, original) {
   const colors = THEMES[theme];
   const glyph = Math.round(size * 0.56);
   const rendered = await sharp(buffer, { density: 288, limitInputPixels: 4e7, animated: false })
@@ -37,7 +45,9 @@ async function icon(buffer, theme, size) {
     .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
-  const mask = buildMask(rendered.data, rendered.info.width, rendered.info.height);
+  const mask = original
+    ? backdrop(rendered.data, rendered.info.width, rendered.info.height)
+    : buildMask(rendered.data, rendered.info.width, rendered.info.height);
   const plate = await sharp(
     Buffer.from(
       `<svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">` +
@@ -47,7 +57,9 @@ async function icon(buffer, theme, size) {
   )
     .png()
     .toBuffer();
-  const mark = await paint(rendered.data, rendered.info.width, rendered.info.height, mask, colors.fg);
+  const mark = original
+    ? await keepColor(rendered.data, rendered.info.width, rendered.info.height, mask)
+    : await paint(rendered.data, rendered.info.width, rendered.info.height, mask, rgb(colors.fg));
   const left = Math.round((size - rendered.info.width) / 2);
   const top = Math.round((size - rendered.info.height) / 2);
   return sharp(plate)
@@ -56,7 +68,7 @@ async function icon(buffer, theme, size) {
     .toBuffer();
 }
 
-function buildMask(data, width, height) {
+function backdrop(data, width, height) {
   const count = width * height;
   const alpha = new Uint8Array(count);
   let opaque = 0;
@@ -80,7 +92,12 @@ function buildMask(data, width, height) {
       Math.abs(data[offset + 2] - corner[2]);
     if (distance > 72) mask[index] = 255;
   }
-  return keepMark(data, mask, count, width);
+  return mask;
+}
+
+function buildMask(data, width, height) {
+  const mask = backdrop(data, width, height);
+  return keepMark(data, mask, width * height, width);
 }
 
 // A coloured tile with a smaller contrasting mark keeps the mark.
@@ -215,6 +232,20 @@ function toneOf(data, offset) {
 function hueGap(left, right) {
   const gap = Math.abs(left - right);
   return Math.min(gap, 360 - gap);
+}
+
+async function keepColor(data, width, height, mask) {
+  const pixels = Buffer.alloc(width * height * 4);
+  for (let index = 0; index < width * height; index += 1) {
+    const alpha = mask[index];
+    if (!alpha) continue;
+    const offset = index * 4;
+    pixels[offset] = data[offset];
+    pixels[offset + 1] = data[offset + 1];
+    pixels[offset + 2] = data[offset + 2];
+    pixels[offset + 3] = alpha;
+  }
+  return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
 
 async function paint(data, width, height, mask, color) {

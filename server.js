@@ -83,7 +83,7 @@ async function handle(req, res) {
     send(res, 200, "image/svg+xml; charset=utf-8", errorSvg("image link is required"), 60);
     return;
   }
-  const theme = themeName(url.searchParams.get("theme") || "dark");
+  const theme = themeName(url.searchParams.get("theme") || "classic");
   if (!theme) {
     send(res, 200, "image/svg+xml; charset=utf-8", errorSvg("unknown theme"), 60);
     return;
@@ -93,14 +93,16 @@ async function handle(req, res) {
     send(res, 200, "image/svg+xml; charset=utf-8", errorSvg("unknown size"), 60);
     return;
   }
-  const key = [theme, size, source].join("\0");
+  const glyph = (url.searchParams.get("glyph") || "1").trim().toLowerCase();
+  const original = ["0", "no", "off", "false"].includes(glyph);
+  const key = [theme, size, original ? "0" : "1", source].join("\0");
   const hit = cache.get(key);
   if (hit && hit.expires > Date.now()) {
     send(res, 200, "image/png", hit.body, TTL);
     return;
   }
   try {
-    const body = await icon(await fetchImage(source), theme, size);
+    const body = await icon(await fetchImage(source), theme, size, original);
     cache.set(key, { expires: Date.now() + TTL * 1000, body });
     send(res, 200, "image/png", body, TTL);
   } catch (error) {
