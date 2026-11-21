@@ -31,7 +31,8 @@ function rgb(hex) {
 function lineRgb(bg) {
   const color = rgb(bg);
   const light = (color.r + color.g + color.b) / 3 > 140;
-  return light ? { r: 177, g: 179, b: 179 } : { r: 92, g: 92, b: 92 };
+  // The cut is drawn on the glyph. A dark tile has a white glyph, so the cut is near black.
+  return light ? { r: 120, g: 120, b: 120 } : { r: 28, g: 28, b: 28 };
 }
 
 function iconSize(value) {
@@ -356,7 +357,7 @@ async function facetLines(buffer, width, height, mask) {
   if (!text.includes("<svg")) return null;
   const paths = text.match(/<path\b/g);
   if (!paths || paths.length < 8) return null;
-  const stroke = Math.max(1.2, (1.7 * viewSpan(text)) / Math.max(width, height));
+  const stroke = Math.max(1.4, (2.0 * viewSpan(text)) / Math.max(width, height));
   const stroked = text
     .replace(/\sstroke="[^"]*"/g, "")
     .replace(/\sstroke-width="[^"]*"/g, "")
