@@ -28,13 +28,6 @@ function rgb(hex) {
   };
 }
 
-function lineRgb(bg) {
-  const color = rgb(bg);
-  const light = (color.r + color.g + color.b) / 3 > 140;
-  // The cut is drawn on the glyph. A dark tile has a white glyph, so the cut is near black.
-  return light ? { r: 120, g: 120, b: 120 } : { r: 28, g: 28, b: 28 };
-}
-
 function iconSize(value) {
   const size = Number(value || 128);
   if (!Number.isFinite(size)) return 0;
@@ -63,9 +56,7 @@ async function icon(buffer, theme, size, original) {
     .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
-  const mask = original
-    ? backdrop(rendered.data, rendered.info.width, rendered.info.height)
-    : buildMask(rendered.data, rendered.info.width, rendered.info.height);
+  const mask = backdrop(rendered.data, rendered.info.width, rendered.info.height);
   const plate = await sharp(
     Buffer.from(
       `<svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">` +
@@ -80,7 +71,7 @@ async function icon(buffer, theme, size, original) {
     : null;
   const lines = original
     ? null
-    : await facetLines(buffer, rendered.info.width, rendered.info.height, mask);
+    : markEdges(rendered.data, mask, rendered.info.width, rendered.info.height);
   const mark = original
     ? await keepColor(rendered.data, rendered.info.width, rendered.info.height, mask, accent)
     : await paint(
@@ -90,8 +81,7 @@ async function icon(buffer, theme, size, original) {
         mask,
         rgb(colors.fg),
         accent,
-        lines,
-        lineRgb(colors.bg)
+        lines
       );
   const left = Math.round((size - rendered.info.width) / 2);
   const top = Math.round((size - rendered.info.height) / 2);
@@ -110,11 +100,13 @@ function backdrop(data, width, height) {
     if (alpha[index] > 24) opaque += 1;
   }
   const mask = new Uint8Array(count);
-  const solid = opaque / count > 0.84;
   const corner = [data[0], data[1], data[2]];
+  const chroma = Math.max(...corner) - Math.min(...corner);
+  const light = (corner[0] + corner[1] + corner[2]) / 3;
+  const canvas = opaque / count > 0.84 && chroma < 28 && (light < 30 || light > 225);
   for (let index = 0; index < count; index += 1) {
     if (alpha[index] < 24) continue;
-    if (!solid) {
+    if (!canvas) {
       mask[index] = alpha[index];
       continue;
     }
@@ -126,122 +118,6 @@ function backdrop(data, width, height) {
     if (distance > 72) mask[index] = 255;
   }
   return mask;
-}
-
-function buildMask(data, width, height) {
-  const mask = backdrop(data, width, height);
-  return keepMark(data, mask, width * height, width);
-}
-
-// A coloured tile with a smaller contrasting mark keeps the mark.
-// A two-colour drawing, such as the Python snakes, keeps both colours.
-function keepMark(data, mask, count, width) {
-  const buckets = new Map();
-  let ink = 0;
-  for (let index = 0; index < count; index += 1) {
-    if (!mask[index]) continue;
-    ink += 1;
-    const key =
-      (data[index * 4] >> 4) * 256 +
-      (data[index * 4 + 1] >> 4) * 16 +
-      (data[index * 4 + 2] >> 4);
-    buckets.set(key, (buckets.get(key) || 0) + 1);
-  }
-  if (ink < 12) return mask;
-  const ranked = [...buckets.entries()].sort((left, right) => right[1] - left[1]);
-  const share = ranked[0][1] / ink;
-  if (share < 0.72 || share > 0.96 || ranked.length < 2) return cutPlate(data, mask, count, width);
-  const key = ranked[0][0];
-  const plate = [(key >> 8) * 16, ((key >> 4) & 15) * 16, (key & 15) * 16];
-  const next = new Uint8Array(count);
-  let kept = 0;
-  for (let index = 0; index < count; index += 1) {
-    if (!mask[index]) continue;
-    const offset = index * 4;
-    const distance =
-      Math.abs(data[offset] - plate[0]) +
-      Math.abs(data[offset + 1] - plate[1]) +
-      Math.abs(data[offset + 2] - plate[2]);
-    if (distance > 96) {
-      next[index] = 255;
-      kept += 1;
-    }
-  }
-  if (kept < ink * 0.05 || kept > ink * 0.4) return cutPlate(data, mask, count, width);
-  return next;
-}
-
-// A filled badge keeps the light or dark mark drawn on it. The badge is the
-// largest hue. A two-colour drawing stays whole, and scattered highlights
-// stay with the drawing.
-function cutPlate(data, mask, count, width) {
-  const height = count / width;
-  const bins = new Array(30).fill(0);
-  let ink = 0;
-  let plateLight = 0;
-  let plateCount = 0;
-  for (let index = 0; index < count; index += 1) {
-    if (!mask[index]) continue;
-    ink += 1;
-    const tone = toneOf(data, index * 4);
-    if (tone.hue < 0) continue;
-    bins[Math.round(tone.hue / 12) % 30] += 1;
-    plateCount += 1;
-  }
-  if (ink < 12 || plateCount < ink * 0.45) return mask;
-  let best = 0;
-  for (let bin = 1; bin < bins.length; bin += 1) if (bins[bin] > bins[best]) best = bin;
-  let clustered = 0;
-  for (let offset = -2; offset <= 2; offset += 1) clustered += bins[(best + offset + 30) % 30];
-  if (clustered < ink * 0.5 || clustered > ink * 0.9) return mask;
-  const plateHue = best * 12;
-  let plateSeen = 0;
-  for (let index = 0; index < count; index += 1) {
-    if (!mask[index]) continue;
-    const tone = toneOf(data, index * 4);
-    if (tone.hue < 0 || hueGap(tone.hue, plateHue) > 28) continue;
-    plateLight += tone.light;
-    plateSeen += 1;
-  }
-  if (!plateSeen) return mask;
-  plateLight /= plateSeen;
-  const next = new Uint8Array(count);
-  let kept = 0;
-  for (let index = 0; index < count; index += 1) {
-    if (!mask[index]) continue;
-    const tone = toneOf(data, index * 4);
-    if (tone.hue >= 0 || Math.abs(tone.light - plateLight) <= 0.38) continue;
-    next[index] = 255;
-    kept += 1;
-  }
-  if (kept < ink * 0.06 || kept > ink * 0.42) return mask;
-  let largest = 0;
-  const seen = new Uint8Array(count);
-  for (let start = 0; start < count; start += 1) {
-    if (!next[start] || seen[start]) continue;
-    let size = 0;
-    const stack = [start];
-    seen[start] = 1;
-    while (stack.length) {
-      const index = stack.pop();
-      size += 1;
-      const x = index % width;
-      const y = (index - x) / width;
-      const neighbors = [];
-      if (x > 0) neighbors.push(index - 1);
-      if (x + 1 < width) neighbors.push(index + 1);
-      if (y > 0) neighbors.push(index - width);
-      if (y + 1 < height) neighbors.push(index + width);
-      neighbors.forEach((nextIndex) => {
-        if (!next[nextIndex] || seen[nextIndex]) return;
-        seen[nextIndex] = 1;
-        stack.push(nextIndex);
-      });
-    }
-    if (size > largest) largest = size;
-  }
-  if (largest < kept * 0.18) return mask;
-  return next;
 }
 
 // A small enclosed dot, such as a Python eye, is the red accent on -r.
@@ -319,74 +195,60 @@ function accentHoles(mask, width, height) {
   return accent;
 }
 
-function toneOf(data, offset) {
-  const red = data[offset] / 255;
-  const green = data[offset + 1] / 255;
-  const blue = data[offset + 2] / 255;
-  const max = Math.max(red, green, blue);
-  const min = Math.min(red, green, blue);
-  const light = (max + min) / 2;
-  const delta = max - min;
-  if (delta < 0.12) return { hue: -1, light };
-  let hue = 0;
-  if (max === red) hue = ((green - blue) / delta) % 6;
-  else if (max === green) hue = (blue - red) / delta + 2;
-  else hue = (red - green) / delta + 4;
-  hue *= 60;
-  if (hue < 0) hue += 360;
-  return { hue, light };
-}
-
-function hueGap(left, right) {
-  const gap = Math.abs(left - right);
-  return Math.min(gap, 360 - gap);
-}
-
 const ACCENT = { r: 200, g: 16, b: 46 };
 
-function viewSpan(text) {
-  const box = /viewBox="\s*[\d.-]+\s+[\d.-]+\s+([\d.]+)\s+([\d.]+)/.exec(text);
-  const span = box ? Math.max(Number(box[1]), Number(box[2])) : 0;
-  return span || 128;
+function colorDistance(data, left, right) {
+  const a = left * 4;
+  const b = right * 4;
+  return (
+    Math.abs(data[a] - data[b]) +
+    Math.abs(data[a + 1] - data[b + 1]) +
+    Math.abs(data[a + 2] - data[b + 2])
+  );
 }
 
-// A gem such as Ruby is many filled facets. Stroke those edges and keep the
-// ones that sit inside the glyph, so the cuts read as a gray border.
-async function facetLines(buffer, width, height, mask) {
-  const text = buffer.toString("utf8");
-  if (!text.includes("<svg")) return null;
-  const paths = text.match(/<path\b/g);
-  if (!paths || paths.length < 8) return null;
-  const stroke = Math.max(1.4, (2.0 * viewSpan(text)) / Math.max(width, height));
-  const stroked = text
-    .replace(/\sstroke="[^"]*"/g, "")
-    .replace(/\sstroke-width="[^"]*"/g, "")
-    .replace(/\sfill="[^"]*"/g, "")
-    .replace(/<path\b/g, `<path fill="none" stroke="#000000" stroke-width="${stroke.toFixed(2)}" stroke-linejoin="miter"`);
-  let rendered;
-  try {
-    rendered = await sharp(Buffer.from(stroked), {
-      density: svgDensity(buffer, Math.max(width, height)),
-      limitInputPixels: 4e7,
-      animated: false,
-    })
-      .resize(width, height, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-  } catch (error) {
-    return null;
+// Every logo keeps its own colours. A thin theme-coloured line traces the
+// silhouette and the real colour changes inside it, so the parts stay distinct.
+function markEdges(data, mask, width, height) {
+  const count = width * height;
+  const outer = new Uint8Array(count);
+  const inner = new Uint8Array(count);
+  for (let index = 0; index < count; index += 1) {
+    if (!mask[index]) continue;
+    const x = index % width;
+    const y = (index - x) / width;
+    const neighbors = [];
+    if (x > 0) neighbors.push(index - 1);
+    if (x + 1 < width) neighbors.push(index + 1);
+    if (y > 0) neighbors.push(index - width);
+    if (y + 1 < height) neighbors.push(index + width);
+    neighbors.forEach((next) => {
+      if (!mask[next]) outer[index] = 255;
+      else if (colorDistance(data, index, next) > 160) inner[index] = 255;
+    });
   }
-  if (rendered.info.width !== width || rendered.info.height !== height) return null;
-  const line = new Uint8Array(width * height);
-  let count = 0;
-  for (let index = 0; index < width * height; index += 1) {
-    if (!mask[index] || rendered.data[index * 4 + 3] < 48) continue;
-    line[index] = 255;
-    count += 1;
+  const edge = dilate(outer, width, height);
+  for (let index = 0; index < count; index += 1) if (inner[index]) edge[index] = 255;
+  return edge;
+}
+
+function dilate(source, width, height) {
+  const count = width * height;
+  const next = new Uint8Array(source);
+  for (let index = 0; index < count; index += 1) {
+    if (!source[index]) continue;
+    const x = index % width;
+    const y = (index - x) / width;
+    const stamp = (nx, ny) => {
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) return;
+      next[ny * width + nx] = 255;
+    };
+    stamp(x - 1, y);
+    stamp(x + 1, y);
+    stamp(x, y - 1);
+    stamp(x, y + 1);
   }
-  if (count < 24) return null;
-  return line;
+  return next;
 }
 
 function stampLines(pixels, lines, color) {
@@ -428,18 +290,18 @@ async function keepColor(data, width, height, mask, accent) {
   return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
 
-async function paint(data, width, height, mask, color, accent, lines, line) {
+async function paint(data, width, height, mask, color, accent, lines) {
   const pixels = Buffer.alloc(width * height * 4);
   for (let index = 0; index < width * height; index += 1) {
     const alpha = mask[index];
     if (!alpha) continue;
     const offset = index * 4;
-    pixels[offset] = color.r;
-    pixels[offset + 1] = color.g;
-    pixels[offset + 2] = color.b;
+    pixels[offset] = data[offset];
+    pixels[offset + 1] = data[offset + 1];
+    pixels[offset + 2] = data[offset + 2];
     pixels[offset + 3] = alpha;
   }
-  stampLines(pixels, lines, line);
+  stampLines(pixels, lines, color);
   stampAccent(pixels, accent);
   return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }

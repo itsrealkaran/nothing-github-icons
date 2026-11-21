@@ -1,6 +1,6 @@
 # Icons
 
-An image link, drawn as a Nothing app icon. The tile follows the theme. The glyph is one colour, unless `glyph=0` keeps the original logo.
+An image link, drawn as a Nothing app icon. The tile follows the theme. The logo keeps its own colours. A thin line in the theme colour traces the shape and the colour changes inside it. `glyph=0` leaves that line off.
 
 ## Usage
 
@@ -20,7 +20,7 @@ https://nothing-github-icons.vercel.app/icon?theme=classic&url=https://raw.githu
 
 ## Themes
 
-| Theme | Tile | Glyph |
+| Theme | Tile | Outline |
 | --- | --- | --- |
 | `classic`, `classic-r`, `dark` | Pure Black `#000000` | white |
 | `white`, `white-r` | Pure White `#FFFFFF` | black |
@@ -29,7 +29,7 @@ https://nothing-github-icons.vercel.app/icon?theme=classic&url=https://raw.githu
 | `blue` | Pure White `#FFFFFF` | N-Blue `#002F6C` |
 | `yellow` | Pure Black `#000000` | N-Yellow `#FFC700` |
 
-The tile is a rounded square. The glyph uses the theme's figure colour and is centred inside it. On classic-r and white-r the figure stays that ink, and a small enclosed dot, such as a Python eye, is N-Red. A faceted mark such as Ruby keeps its cuts as a gray border: near black on a dark tile, so the line shows on the white glyph, and a darker gray on a light tile. `dark` is `classic`.
+The tile is a rounded square. The logo keeps its colours and is centred inside the tile. A thin outline in the theme colour follows the outer shape and the real colour changes inside, so a mark stays recognisable on a black tile and on a white tile. On classic-r and white-r a small enclosed dot, such as a Python eye, is N-Red. `dark` is `classic`.
 
 ## Parameters
 
@@ -37,10 +37,10 @@ The tile is a rounded square. The glyph uses the theme's figure colour and is ce
 | --- | --- | --- | --- |
 | `url` | yes |  | Image link. `src` is the same parameter. |
 | `theme` | no | `classic` | One of the themes above. |
-| `glyph` | no | on | `0`, `no`, `off`, or `false` keeps the original logo colours. |
+| `glyph` | no | on | `0`, `no`, `off`, or `false` leaves the outline off. |
 | `size` | no | `128` | Square side, from 32 to 512. |
 
-`glyph=0` leaves the logo in its own colours and sets it on the theme tile.
+`glyph=0` leaves the outline off. The logo still sits on the theme tile in its own colours.
 
 ## Run locally
 
