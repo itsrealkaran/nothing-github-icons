@@ -29,7 +29,7 @@ https://nothing-github-icons.vercel.app/icon?theme=classic&url=https://raw.githu
 | `blue` | Pure White `#FFFFFF` | N-Blue `#002F6C` |
 | `yellow` | Pure Black `#000000` | N-Yellow `#FFC700` |
 
-The tile is a rounded square. The glyph uses the theme's figure colour and is centred inside it. On classic-r and white-r the figure stays that ink, and a small enclosed dot, such as a Python eye, is N-Red. `dark` is `classic`.
+The tile is a rounded square. The glyph uses the theme's figure colour and is centred inside it. On classic-r and white-r the figure stays that ink, and a small enclosed dot, such as a Python eye, is N-Red. A faceted mark such as Ruby keeps its cuts as a gray border: dark gray on a dark tile, light gray on a light tile. `dark` is `classic`.
 
 ## Parameters
 

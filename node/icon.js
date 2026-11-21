@@ -28,6 +28,12 @@ function rgb(hex) {
   };
 }
 
+function lineRgb(bg) {
+  const color = rgb(bg);
+  const light = (color.r + color.g + color.b) / 3 > 140;
+  return light ? { r: 177, g: 179, b: 179 } : { r: 92, g: 92, b: 92 };
+}
+
 function iconSize(value) {
   const size = Number(value || 128);
   if (!Number.isFinite(size)) return 0;
@@ -71,9 +77,21 @@ async function icon(buffer, theme, size, original) {
   const accent = theme.endsWith("-r")
     ? accentHoles(mask, rendered.info.width, rendered.info.height)
     : null;
+  const lines = original
+    ? null
+    : await facetLines(buffer, rendered.info.width, rendered.info.height, mask);
   const mark = original
     ? await keepColor(rendered.data, rendered.info.width, rendered.info.height, mask, accent)
-    : await paint(rendered.data, rendered.info.width, rendered.info.height, mask, rgb(colors.fg), accent);
+    : await paint(
+        rendered.data,
+        rendered.info.width,
+        rendered.info.height,
+        mask,
+        rgb(colors.fg),
+        accent,
+        lines,
+        lineRgb(colors.bg)
+      );
   const left = Math.round((size - rendered.info.width) / 2);
   const top = Math.round((size - rendered.info.height) / 2);
   return sharp(plate)
@@ -325,6 +343,63 @@ function hueGap(left, right) {
 
 const ACCENT = { r: 200, g: 16, b: 46 };
 
+function viewSpan(text) {
+  const box = /viewBox="\s*[\d.-]+\s+[\d.-]+\s+([\d.]+)\s+([\d.]+)/.exec(text);
+  const span = box ? Math.max(Number(box[1]), Number(box[2])) : 0;
+  return span || 128;
+}
+
+// A gem such as Ruby is many filled facets. Stroke those edges and keep the
+// ones that sit inside the glyph, so the cuts read as a gray border.
+async function facetLines(buffer, width, height, mask) {
+  const text = buffer.toString("utf8");
+  if (!text.includes("<svg")) return null;
+  const paths = text.match(/<path\b/g);
+  if (!paths || paths.length < 8) return null;
+  const stroke = Math.max(1.2, (1.7 * viewSpan(text)) / Math.max(width, height));
+  const stroked = text
+    .replace(/\sstroke="[^"]*"/g, "")
+    .replace(/\sstroke-width="[^"]*"/g, "")
+    .replace(/\sfill="[^"]*"/g, "")
+    .replace(/<path\b/g, `<path fill="none" stroke="#000000" stroke-width="${stroke.toFixed(2)}" stroke-linejoin="miter"`);
+  let rendered;
+  try {
+    rendered = await sharp(Buffer.from(stroked), {
+      density: svgDensity(buffer, Math.max(width, height)),
+      limitInputPixels: 4e7,
+      animated: false,
+    })
+      .resize(width, height, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+  } catch (error) {
+    return null;
+  }
+  if (rendered.info.width !== width || rendered.info.height !== height) return null;
+  const line = new Uint8Array(width * height);
+  let count = 0;
+  for (let index = 0; index < width * height; index += 1) {
+    if (!mask[index] || rendered.data[index * 4 + 3] < 48) continue;
+    line[index] = 255;
+    count += 1;
+  }
+  if (count < 24) return null;
+  return line;
+}
+
+function stampLines(pixels, lines, color) {
+  if (!lines) return;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index]) continue;
+    const offset = index * 4;
+    pixels[offset] = color.r;
+    pixels[offset + 1] = color.g;
+    pixels[offset + 2] = color.b;
+    pixels[offset + 3] = 255;
+  }
+}
+
 function stampAccent(pixels, accent) {
   if (!accent) return;
   for (let index = 0; index < accent.length; index += 1) {
@@ -352,7 +427,7 @@ async function keepColor(data, width, height, mask, accent) {
   return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
 
-async function paint(data, width, height, mask, color, accent) {
+async function paint(data, width, height, mask, color, accent, lines, line) {
   const pixels = Buffer.alloc(width * height * 4);
   for (let index = 0; index < width * height; index += 1) {
     const alpha = mask[index];
@@ -363,6 +438,7 @@ async function paint(data, width, height, mask, color, accent) {
     pixels[offset + 2] = color.b;
     pixels[offset + 3] = alpha;
   }
+  stampLines(pixels, lines, line);
   stampAccent(pixels, accent);
   return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
