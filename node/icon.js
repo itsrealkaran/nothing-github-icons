@@ -13,10 +13,8 @@ const THEMES = {
   yellow: { bg: "#000000", fg: "#FFC700" },
 };
 
-const ALIASES = { dark: "classic" };
-
 function themeName(value) {
-  const name = ALIASES[String(value || "classic").trim().toLowerCase()] || String(value || "classic").trim().toLowerCase();
+  const name = String(value || "classic").trim() || "classic";
   return Object.prototype.hasOwnProperty.call(THEMES, name) ? name : "";
 }
 
@@ -29,9 +27,11 @@ function rgb(hex) {
 }
 
 function iconSize(value) {
-  const size = Number(value || 128);
-  if (!Number.isFinite(size)) return 0;
-  return Math.round(size);
+  const text = String(value ?? "128").trim();
+  if (!/^\d+$/.test(text)) return 0;
+  const size = Number(text);
+  if (String(size) !== text) return 0;
+  return size;
 }
 
 function svgDensity(buffer, glyph) {
@@ -69,20 +69,9 @@ async function icon(buffer, theme, size, original) {
   const accent = theme.endsWith("-r")
     ? accentHoles(mask, rendered.info.width, rendered.info.height)
     : null;
-  const lines = original
-    ? null
-    : markEdges(rendered.data, mask, rendered.info.width, rendered.info.height);
   const mark = original
     ? await keepColor(rendered.data, rendered.info.width, rendered.info.height, mask, accent)
-    : await paint(
-        rendered.data,
-        rendered.info.width,
-        rendered.info.height,
-        mask,
-        rgb(colors.fg),
-        accent,
-        lines
-      );
+    : await paint(rendered.data, rendered.info.width, rendered.info.height, mask, rgb(colors.fg), accent);
   const left = Math.round((size - rendered.info.width) / 2);
   const top = Math.round((size - rendered.info.height) / 2);
   return sharp(plate)
@@ -197,58 +186,100 @@ function accentHoles(mask, width, height) {
 
 const ACCENT = { r: 200, g: 16, b: 46 };
 
-function colorDistance(data, left, right) {
-  const a = left * 4;
-  const b = right * 4;
-  return (
-    Math.abs(data[a] - data[b]) +
-    Math.abs(data[a + 1] - data[b + 1]) +
-    Math.abs(data[a + 2] - data[b + 2])
-  );
-}
-
-// Every logo keeps its own colours. A thin theme-coloured line traces the
-// silhouette and the real colour changes inside it, so the parts stay distinct.
-function markEdges(data, mask, width, height) {
-  const count = width * height;
-  const outer = new Uint8Array(count);
-  const inner = new Uint8Array(count);
+function assignRegions(data, mask, count) {
+  const buckets = new Map();
+  let ink = 0;
   for (let index = 0; index < count; index += 1) {
     if (!mask[index]) continue;
-    const x = index % width;
-    const y = (index - x) / width;
-    const neighbors = [];
-    if (x > 0) neighbors.push(index - 1);
-    if (x + 1 < width) neighbors.push(index + 1);
-    if (y > 0) neighbors.push(index - width);
-    if (y + 1 < height) neighbors.push(index + width);
-    neighbors.forEach((next) => {
-      if (!mask[next]) outer[index] = 255;
-      else if (colorDistance(data, index, next) > 160) inner[index] = 255;
-    });
+    ink += 1;
+    const offset = index * 4;
+    const key = (data[offset] >> 4) * 256 + (data[offset + 1] >> 4) * 16 + (data[offset + 2] >> 4);
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { n: 0, r: 0, g: 0, b: 0 };
+      buckets.set(key, bucket);
+    }
+    bucket.n += 1;
+    bucket.r += data[offset];
+    bucket.g += data[offset + 1];
+    bucket.b += data[offset + 2];
   }
-  const edge = dilate(outer, width, height);
-  for (let index = 0; index < count; index += 1) if (inner[index]) edge[index] = 255;
-  return edge;
+  const ranked = [...buckets.values()].sort((left, right) => right.n - left.n);
+  const kept = [];
+  ranked.forEach((bucket) => {
+    if (kept.length >= 4) return;
+    if (kept.length && bucket.n < ink * 0.07) return;
+    const color = { r: bucket.r / bucket.n, g: bucket.g / bucket.n, b: bucket.b / bucket.n, n: bucket.n };
+    const near = kept.find((item) => Math.abs(item.r - color.r) + Math.abs(item.g - color.g) + Math.abs(item.b - color.b) < 90);
+    if (near) {
+      near.n += color.n;
+      return;
+    }
+    kept.push(color);
+  });
+  if (kept.length < 4 && ink) {
+    let n = 0;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    for (let index = 0; index < count; index += 1) {
+      if (!mask[index]) continue;
+      const offset = index * 4;
+      const apart = kept.every((item) => (
+        Math.abs(data[offset] - item.r) +
+        Math.abs(data[offset + 1] - item.g) +
+        Math.abs(data[offset + 2] - item.b)
+      ) > 180);
+      if (!apart) continue;
+      n += 1;
+      r += data[offset];
+      g += data[offset + 1];
+      b += data[offset + 2];
+    }
+    if (n > ink * 0.03) kept.push({ r: r / n, g: g / n, b: b / n, n });
+  }
+  if (!kept.length && ranked[0]) {
+    const bucket = ranked[0];
+    kept.push({ r: bucket.r / bucket.n, g: bucket.g / bucket.n, b: bucket.b / bucket.n, n: bucket.n });
+  }
+  const ids = new Uint8Array(count);
+  for (let index = 0; index < count; index += 1) {
+    if (!mask[index]) continue;
+    const offset = index * 4;
+    let best = 0;
+    let bestDistance = Infinity;
+    for (let region = 0; region < kept.length; region += 1) {
+      const distance =
+        Math.abs(data[offset] - kept[region].r) +
+        Math.abs(data[offset + 1] - kept[region].g) +
+        Math.abs(data[offset + 2] - kept[region].b);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = region;
+      }
+    }
+    ids[index] = best + 1;
+  }
+  return { ids, kept };
 }
 
-function dilate(source, width, height) {
-  const count = width * height;
-  const next = new Uint8Array(source);
-  for (let index = 0; index < count; index += 1) {
-    if (!source[index]) continue;
-    const x = index % width;
-    const y = (index - x) / width;
-    const stamp = (nx, ny) => {
-      if (nx < 0 || ny < 0 || nx >= width || ny >= height) return;
-      next[ny * width + nx] = 255;
+function shadeStops(fg, kept) {
+  const lightInk = (fg.r + fg.g + fg.b) / 3 > 140;
+  const order = kept
+    .map((color, index) => ({ index, light: (color.r + color.g + color.b) / 3 }))
+    .sort((left, right) => (lightInk ? right.light - left.light : left.light - right.light));
+  const shades = new Array(kept.length);
+  order.forEach((item, rank) => {
+    const mix = kept.length === 1 ? 0 : (rank / (kept.length - 1)) * (lightInk ? 0.58 : 0.5);
+    const toward = lightInk ? 0 : 255;
+    shades[item.index] = {
+      r: Math.round(fg.r + (toward - fg.r) * mix),
+      g: Math.round(fg.g + (toward - fg.g) * mix),
+      b: Math.round(fg.b + (toward - fg.b) * mix),
     };
-    stamp(x - 1, y);
-    stamp(x + 1, y);
-    stamp(x, y - 1);
-    stamp(x, y + 1);
-  }
-  return next;
+  });
+  const outline = lightInk ? { r: 32, g: 32, b: 32 } : { r: 236, g: 236, b: 236 };
+  return { shades, outline };
 }
 
 function stampLines(pixels, lines, color) {
@@ -290,18 +321,49 @@ async function keepColor(data, width, height, mask, accent) {
   return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
 
-async function paint(data, width, height, mask, color, accent, lines) {
-  const pixels = Buffer.alloc(width * height * 4);
-  for (let index = 0; index < width * height; index += 1) {
-    const alpha = mask[index];
-    if (!alpha) continue;
+async function paint(data, width, height, mask, color, accent) {
+  const count = width * height;
+  const { ids, kept } = assignRegions(data, mask, count);
+  const { shades, outline } = shadeStops(color, kept);
+  const pixels = Buffer.alloc(count * 4);
+  const edge = new Uint8Array(count);
+  for (let index = 0; index < count; index += 1) {
+    const region = ids[index];
+    if (!region) continue;
+    const x = index % width;
+    const y = (index - x) / width;
+    const neighbors = [];
+    if (x > 0) neighbors.push(index - 1);
+    if (x + 1 < width) neighbors.push(index + 1);
+    if (y > 0) neighbors.push(index - width);
+    if (y + 1 < height) neighbors.push(index + width);
+    if (neighbors.some((next) => ids[next] !== region)) edge[index] = 255;
+    const shade = shades[region - 1];
     const offset = index * 4;
-    pixels[offset] = data[offset];
-    pixels[offset + 1] = data[offset + 1];
-    pixels[offset + 2] = data[offset + 2];
-    pixels[offset + 3] = alpha;
+    pixels[offset] = shade.r;
+    pixels[offset + 1] = shade.g;
+    pixels[offset + 2] = shade.b;
+    pixels[offset + 3] = mask[index];
   }
-  stampLines(pixels, lines, color);
+  const line = new Uint8Array(edge);
+  for (let index = 0; index < count; index += 1) {
+    if (!edge[index]) continue;
+    const x = index % width;
+    const y = (index - x) / width;
+    const outside =
+      x === 0 || x + 1 === width || y === 0 || y + 1 === height ||
+      !ids[index - 1] || !ids[index + 1] || !ids[index - width] || !ids[index + width];
+    if (!outside) continue;
+    const stamp = (nx, ny) => {
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) return;
+      line[ny * width + nx] = 255;
+    };
+    stamp(x - 1, y);
+    stamp(x + 1, y);
+    stamp(x, y - 1);
+    stamp(x, y + 1);
+  }
+  stampLines(pixels, line, outline);
   stampAccent(pixels, accent);
   return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
