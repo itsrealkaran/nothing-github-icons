@@ -34,10 +34,21 @@ function iconSize(value) {
   return Math.round(size);
 }
 
+function svgDensity(buffer, glyph) {
+  const head = buffer.subarray(0, 800).toString("utf8");
+  if (!head.includes("<svg")) return 288;
+  const width = Number((/\bwidth="([\d.]+)/.exec(head) || [])[1]);
+  const height = Number((/\bheight="([\d.]+)/.exec(head) || [])[1]);
+  const declared = Math.max(width || 0, height || 0);
+  if (!declared) return 288;
+  const target = Math.max(glyph * 4, 256);
+  return Math.min(288, Math.max(36, Math.round((72 * target) / declared)));
+}
+
 async function icon(buffer, theme, size, original) {
   const colors = THEMES[theme];
   const glyph = Math.round(size * 0.56);
-  const rendered = await sharp(buffer, { density: 288, limitInputPixels: 4e7, animated: false })
+  const rendered = await sharp(buffer, { density: svgDensity(buffer, glyph), limitInputPixels: 4e7, animated: false })
     .resize(glyph, glyph, {
       fit: "contain",
       background: { r: 0, g: 0, b: 0, alpha: 0 },
