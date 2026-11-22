@@ -279,7 +279,8 @@ function shadeStops(fg, kept) {
     };
   });
   const outline = lightInk ? { r: 32, g: 32, b: 32 } : { r: 236, g: 236, b: 236 };
-  return { shades, outline };
+  const border = lightInk ? null : { r: 32, g: 32, b: 32 };
+  return { shades, outline, border };
 }
 
 function stampLines(pixels, lines, color) {
@@ -324,7 +325,7 @@ async function keepColor(data, width, height, mask, accent) {
 async function paint(data, width, height, mask, color, accent) {
   const count = width * height;
   const { ids, kept } = assignRegions(data, mask, count);
-  const { shades, outline } = shadeStops(color, kept);
+  const { shades, outline, border } = shadeStops(color, kept);
   const pixels = Buffer.alloc(count * 4);
   const edge = new Uint8Array(count);
   for (let index = 0; index < count; index += 1) {
@@ -346,6 +347,7 @@ async function paint(data, width, height, mask, color, accent) {
     pixels[offset + 3] = mask[index];
   }
   const line = new Uint8Array(edge);
+  const halo = border ? new Uint8Array(count) : null;
   for (let index = 0; index < count; index += 1) {
     if (!edge[index]) continue;
     const x = index % width;
@@ -356,7 +358,9 @@ async function paint(data, width, height, mask, color, accent) {
     if (!outside) continue;
     const stamp = (nx, ny) => {
       if (nx < 0 || ny < 0 || nx >= width || ny >= height) return;
-      line[ny * width + nx] = 255;
+      const next = ny * width + nx;
+      line[next] = 255;
+      if (halo && !ids[next]) halo[next] = 255;
     };
     stamp(x - 1, y);
     stamp(x + 1, y);
@@ -364,6 +368,7 @@ async function paint(data, width, height, mask, color, accent) {
     stamp(x, y + 1);
   }
   stampLines(pixels, line, outline);
+  if (halo) stampLines(pixels, halo, border);
   stampAccent(pixels, accent);
   return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
