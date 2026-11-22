@@ -29,7 +29,7 @@ https://nothing-github-icons.vercel.app/icon?theme=classic&url=https://raw.githu
 | `blue` | Pure White `#FFFFFF` | N-Blue `#002F6C` |
 | `yellow` | Pure Black `#000000` | N-Yellow `#FFC700` |
 
-The tile is a rounded square. The glyph is the theme colour, centred inside the tile. Separate parts of a logo become lighter or darker shades of that colour. A thin outline follows the outer shape and the changes between those parts. On classic-r and white-r a small enclosed dot, such as a Python eye, is N-Red.
+The tile is a rounded square. The glyph is the theme colour, centred inside the tile. A logo that is already solid black or solid white is replaced with that colour. A logo with separate parts becomes lighter or darker shades of that colour, and a thin outline follows the outer shape and the changes between those parts. Classic and classic-r draw the light tile and flip those colours, so the shades and the outline stay in step with white and white-r. On classic-r and white-r a small enclosed dot, such as a Python eye, stays N-Red.
 
 ## Parameters
 

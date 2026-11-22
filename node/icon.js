@@ -186,6 +186,53 @@ function accentHoles(mask, width, height) {
 
 const ACCENT = { r: 200, g: 16, b: 46 };
 
+function solidMono(data, mask, width, count) {
+  const tone = new Int8Array(count);
+  let ink = 0;
+  let dark = 0;
+  let light = 0;
+  let chroma = 0;
+  for (let index = 0; index < count; index += 1) {
+    if (mask[index] < 24) continue;
+    ink += 1;
+    const offset = index * 4;
+    const red = data[offset];
+    const green = data[offset + 1];
+    const blue = data[offset + 2];
+    const spread = Math.max(red, green, blue) - Math.min(red, green, blue);
+    const level = (red + green + blue) / 3;
+    if (spread > 28) {
+      chroma += 1;
+      continue;
+    }
+    if (level < 80) {
+      dark += 1;
+      tone[index] = 1;
+    } else if (level > 175) {
+      light += 1;
+      tone[index] = 2;
+    }
+  }
+  if (ink < 8 || chroma / ink > 0.05) return false;
+  const minority = dark < light ? 1 : 2;
+  const minorityCount = Math.min(dark, light);
+  if (!minorityCount) return true;
+  const height = count / width;
+  let core = 0;
+  for (let index = 0; index < count; index += 1) {
+    if (tone[index] !== minority) continue;
+    const x = index % width;
+    const y = (index - x) / width;
+    let same = 0;
+    if (x > 0 && tone[index - 1] === minority) same += 1;
+    if (x + 1 < width && tone[index + 1] === minority) same += 1;
+    if (y > 0 && tone[index - width] === minority) same += 1;
+    if (y + 1 < height && tone[index + width] === minority) same += 1;
+    if (same >= 3) core += 1;
+  }
+  return core / minorityCount < 0.25;
+}
+
 function assignRegions(data, mask, count) {
   const buckets = new Map();
   let ink = 0;
@@ -322,10 +369,42 @@ async function keepColor(data, width, height, mask, accent) {
   return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
 
+function neutralLight(color) {
+  const spread = Math.max(color.r, color.g, color.b) - Math.min(color.r, color.g, color.b);
+  return spread < 28 && (color.r + color.g + color.b) / 3 > 140;
+}
+
+function invertNeutral(pixels) {
+  for (let index = 0; index < pixels.length; index += 4) {
+    if (!pixels[index + 3]) continue;
+    pixels[index] = 255 - pixels[index];
+    pixels[index + 1] = 255 - pixels[index + 1];
+    pixels[index + 2] = 255 - pixels[index + 2];
+  }
+}
+
+async function paintFlat(width, height, mask, color, accent) {
+  const ink = neutralLight(color) ? { r: 0, g: 0, b: 0 } : color;
+  const pixels = Buffer.alloc(width * height * 4);
+  for (let index = 0; index < width * height; index += 1) {
+    if (!mask[index]) continue;
+    const offset = index * 4;
+    pixels[offset] = ink.r;
+    pixels[offset + 1] = ink.g;
+    pixels[offset + 2] = ink.b;
+    pixels[offset + 3] = mask[index];
+  }
+  if (ink !== color) invertNeutral(pixels);
+  stampAccent(pixels, accent);
+  return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
+}
+
 async function paint(data, width, height, mask, color, accent) {
   const count = width * height;
+  if (solidMono(data, mask, width, count)) return paintFlat(width, height, mask, color, accent);
+  const ink = neutralLight(color) ? { r: 0, g: 0, b: 0 } : color;
   const { ids, kept } = assignRegions(data, mask, count);
-  const { shades, outline, border } = shadeStops(color, kept);
+  const { shades, outline, border } = shadeStops(ink, kept);
   const pixels = Buffer.alloc(count * 4);
   const edge = new Uint8Array(count);
   for (let index = 0; index < count; index += 1) {
@@ -369,6 +448,7 @@ async function paint(data, width, height, mask, color, accent) {
   }
   stampLines(pixels, line, outline);
   if (halo) stampLines(pixels, halo, border);
+  if (ink !== color) invertNeutral(pixels);
   stampAccent(pixels, accent);
   return sharp(pixels, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
